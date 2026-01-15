@@ -41,6 +41,10 @@ app.use(
 
 app.use(express.json()); // JSON 파싱
 
+app.get("/healthz", (req, res) => {
+  res.status(200).send("ok");
+});
+
 // 게시글/댓글 작성 속도 제한 (1분당 5회)
 const postLimiter = rateLimit({
   windowMs: 60 * 1000, // 1분
