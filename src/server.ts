@@ -14,24 +14,35 @@ const client = new MongoClient(uri);
 const app = express();
 
 // CORS 설정 - Vercel 프론트엔드 도메인 허용
-const allowedOrigins = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(",") : ["http://localhost:3000"];
+// const allowedOrigins = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(",") : ["http://localhost:3000"];
 
-const isDevelopment = process.env.NODE_ENV !== "production";
+// const isDevelopment = process.env.NODE_ENV !== "production";
+
+const allowedOrigins = [
+  ...(process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(",") : []),
+  "https://www.kpolitics.co.kr",
+  "https://kpolitics.co.kr",
+  "https://kpolitics.vercel.app",
+  "http://localhost:3000",
+];
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      // 개발 모드: origin이 없는 경우도 허용 (Postman 등)
-      // 프로덕션 모드: origin이 있고 허용 목록에 있는 경우만 허용
-      if (isDevelopment && !origin) {
-        callback(null, true);
-      } else if (origin && allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else if (!origin && !isDevelopment) {
-        callback(new Error("CORS 정책에 의해 차단되었습니다"));
-      } else {
-        callback(new Error("CORS 정책에 의해 차단되었습니다"));
+      // Postman, server-to-server 허용
+      if (!origin) return callback(null, true);
+
+      // 정확 일치
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
       }
+
+      // Vercel preview 도메인 허용
+      if (origin.endsWith(".vercel.app")) {
+        return callback(null, true);
+      }
+
+      return callback(new Error("CORS 정책에 의해 차단되었습니다"));
     },
     credentials: true,
     methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
