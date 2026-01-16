@@ -73,6 +73,12 @@ let commentsCollection;
 let billsCollection;
 let pledgesCollection;
 let winnersCollection; // 당선인 정보 캐시
+let questionsCollection; // 정치성향 테스트 문항
+
+// 정치성향 테스트 문항 캐시
+let cachedQuestions: any[] | null = null;
+let lastQuestionsCacheTime: number | null = null;
+const QUESTIONS_CACHE_DURATION = 24 * 60 * 60 * 1000; // 24시간
 
 // Function to fetch assembly members from API and cache in MongoDB
 async function fetchAndCacheMembers() {
@@ -1611,6 +1617,60 @@ app.get("/api/assembly/member/:name", async (req, res) => {
   }
 });
 
+// ========== 정치성향 테스트 API ==========
+
+// 문항 조회 (캐싱 적용)
+async function getQuestions() {
+  const now = Date.now();
+
+  // 캐시가 유효한 경우 바로 반환
+  if (cachedQuestions && lastQuestionsCacheTime && now - lastQuestionsCacheTime < QUESTIONS_CACHE_DURATION) {
+    return cachedQuestions;
+  }
+
+  // 캐시가 없거나 만료된 경우 DB에서 조회
+  const questions = await questionsCollection.find({}).sort({ order: 1 }).toArray();
+
+  // 캐시 업데이트
+  cachedQuestions = questions;
+  lastQuestionsCacheTime = now;
+
+  console.log(`✅ 정치성향 테스트 문항 ${questions.length}개 캐싱됨`);
+
+  return questions;
+}
+
+// 정치성향 테스트 문항 전체 조회
+app.get("/api/political-test/questions", async (req, res) => {
+  try {
+    const questions = await getQuestions();
+
+    if (!questions || questions.length === 0) {
+      return res.status(503).json({
+        error: "문항 데이터가 아직 준비되지 않았습니다. 잠시 후 다시 시도해주세요.",
+      });
+    }
+
+    // _id 필드 제외하고 반환
+    const formattedQuestions = questions.map((q) => ({
+      questionId: q.questionId,
+      order: q.order,
+      category: q.category,
+      questionText: q.questionText,
+      options: q.options,
+    }));
+
+    res.json({
+      success: true,
+      questions: formattedQuestions,
+      count: formattedQuestions.length,
+    });
+  } catch (err) {
+    console.error("문항 조회 실패:", err);
+    res.status(500).json({ error: "문항 조회 실패" });
+  }
+});
+
 async function startServer() {
   try {
     await client.connect();
@@ -1625,6 +1685,7 @@ async function startServer() {
     billsCollection = db.collection("bills");
     pledgesCollection = db.collection("governorPledges");
     winnersCollection = db.collection("electionWinners"); // 당선인 정보 캐시
+    questionsCollection = db.collection("politicalTestQuestions"); // 정치성향 테스트 문항
 
     // 게시판 인덱스 생성
     await postsCollection.createIndex({ createdAt: -1 });
@@ -1637,6 +1698,11 @@ async function startServer() {
     await pledgesCollection.createIndex({ governorName: 1 });
     await pledgesCollection.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
     console.log("✅ 공약 인덱스 생성 완료");
+
+    // 정치성향 테스트 인덱스 생성
+    await questionsCollection.createIndex({ questionId: 1 }, { unique: true });
+    await questionsCollection.createIndex({ order: 1 });
+    console.log("✅ 정치성향 테스트 인덱스 생성 완료");
 
     // Check if cached data exists
     const cachedData = await assemblyMembersCollection.findOne({ _id: "current" });
