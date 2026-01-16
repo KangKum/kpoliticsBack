@@ -6,6 +6,7 @@ import cron from "node-cron";
 import puppeteer from "puppeteer";
 import bcrypt from "bcrypt";
 import rateLimit from "express-rate-limit";
+import sanitizeHtml from "sanitize-html";
 import { seedQuestionsData } from "./scripts/seedQuestions";
 
 dotenv.config();
@@ -13,6 +14,17 @@ dotenv.config();
 const uri = process.env.MONGODB_URI;
 const client = new MongoClient(uri);
 const app = express();
+
+// 환경 모드 확인
+const isDevelopment = process.env.NODE_ENV === 'development';
+
+// 에러 메시지 헬퍼 함수 (프로덕션에서는 상세 정보 숨김)
+function getErrorMessage(err: any, defaultMessage: string) {
+  if (isDevelopment) {
+    return err.message || defaultMessage;
+  }
+  return defaultMessage;
+}
 
 // CORS 설정 - Vercel 프론트엔드 도메인 허용
 // const allowedOrigins = process.env.FRONTEND_URL ? process.env.FRONTEND_URL.split(",") : ["http://localhost:3000"];
@@ -33,13 +45,8 @@ app.use(
       // Postman, server-to-server 허용
       if (!origin) return callback(null, true);
 
-      // 정확 일치
+      // 정확 일치만 허용
       if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-
-      // Vercel preview 도메인 허용
-      if (origin.endsWith(".vercel.app")) {
         return callback(null, true);
       }
 
@@ -53,8 +60,26 @@ app.use(
 
 app.use(express.json()); // JSON 파싱
 
-app.get("/healthz", (req, res) => {
-  res.status(200).send("ok");
+app.get("/healthz", async (req, res) => {
+  try {
+    // MongoDB 연결 확인
+    await client.db().admin().ping();
+
+    res.status(200).json({
+      status: "healthy",
+      timestamp: new Date().toISOString(),
+      version: process.env.npm_package_version || "1.0.0",
+      mongodb: "connected",
+      environment: process.env.NODE_ENV || "development"
+    });
+  } catch (err) {
+    console.error("Healthcheck failed:", err);
+    res.status(503).json({
+      status: "unhealthy",
+      timestamp: new Date().toISOString(),
+      error: "Database connection failed"
+    });
+  }
 });
 
 // 게시글/댓글 작성 속도 제한 (1분당 5회)
@@ -64,6 +89,15 @@ const postLimiter = rateLimit({
   message: { error: "게시글/댓글 작성이 너무 빈번합니다. 잠시 후 다시 시도해주세요." },
   standardHeaders: true, // Rate limit 정보를 `RateLimit-*` 헤더에 포함
   legacyHeaders: false, // `X-RateLimit-*` 헤더 비활성화
+});
+
+// GET 요청에 대한 Rate Limiter (크롤링/스크래핑 방지)
+const readLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1분
+  max: 100, // 1분당 최대 100회 요청
+  message: { error: "요청이 너무 빈번합니다. 잠시 후 다시 시도해주세요." },
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
 let assemblyMembersCollection;
@@ -875,7 +909,7 @@ function parsePledges(apiResponse: any) {
 }
 
 // 국회의원 정보 조회 API
-app.get("/api/assembly/members", async (req, res) => {
+app.get("/api/assembly/members", readLimiter, async (req, res) => {
   try {
     // Get optional region parameter
     const regionFilter = req.query.region as string | undefined;
@@ -936,7 +970,7 @@ function normalizeRegionName(regionName: string): string {
   return regionMap[regionName] || regionName;
 }
 
-app.get("/api/governors/metropolitan", async (req, res) => {
+app.get("/api/governors/metropolitan", readLimiter, async (req, res) => {
   try {
     const regionFilter = req.query.region as string | undefined;
     const cachedData = await metropolitanGovernorsCollection.findOne({ _id: "current" });
@@ -967,7 +1001,7 @@ app.get("/api/governors/metropolitan", async (req, res) => {
 });
 
 // 기초단체장 정보 조회 API
-app.get("/api/governors/basic", async (req, res) => {
+app.get("/api/governors/basic", readLimiter, async (req, res) => {
   try {
     const metroFilter = req.query.metro as string | undefined;
 
@@ -1028,9 +1062,9 @@ app.post("/api/governors/refresh", async (req, res) => {
 });
 
 // 역대 단체장 조회 API (pledges보다 먼저 정의해야 함)
-app.get("/api/governors/previous/:region", async (req, res) => {
+app.get("/api/governors/previous/:region", readLimiter, async (req, res) => {
   try {
-    const region = req.params.region; // Express가 이미 디코딩함
+    const region = req.params.region as string; // Express가 이미 디코딩함
     const isBasic = req.query.isBasic === "true";
 
     const previousGovernors = await findPreviousGovernors(region, isBasic);
@@ -1050,14 +1084,18 @@ app.get("/api/governors/previous/:region", async (req, res) => {
     });
   } catch (err: any) {
     console.error("❌ 역대 단체장 조회 실패:", err);
-    res.status(500).json({ error: "역대 단체장 조회 실패", details: err.message });
+    const errorMessage = getErrorMessage(err, "역대 단체장 조회 실패");
+    res.status(500).json({
+      error: errorMessage,
+      ...(isDevelopment && { stack: err.stack })
+    });
   }
 });
 
 // 단체장 공약 조회 API
-app.get("/api/governors/pledges/:name", async (req, res) => {
+app.get("/api/governors/pledges/:name", readLimiter, async (req, res) => {
   try {
-    const governorName = decodeURIComponent(req.params.name);
+    const governorName = decodeURIComponent(req.params.name as string);
 
     // 1. MongoDB 캐시 확인
     const cached = await pledgesCollection.findOne({
@@ -1108,14 +1146,18 @@ app.get("/api/governors/pledges/:name", async (req, res) => {
     res.json(parsedPledges);
   } catch (err: any) {
     console.error("❌ 공약 조회 실패:", err);
-    res.status(500).json({ error: "공약 조회 실패", details: err.message });
+    const errorMessage = getErrorMessage(err, "공약 조회 실패");
+    res.status(500).json({
+      error: errorMessage,
+      ...(isDevelopment && { stack: err.stack })
+    });
   }
 });
 
 // 디버그: 공약 캐시 데이터 조회
-app.get("/api/governors/pledges-debug/:name", async (req, res) => {
+app.get("/api/governors/pledges-debug/:name", readLimiter, async (req, res) => {
   try {
-    const governorName = decodeURIComponent(req.params.name);
+    const governorName = decodeURIComponent(req.params.name as string);
     const cached = await pledgesCollection.findOne({ governorName });
 
     if (!cached) {
@@ -1124,7 +1166,11 @@ app.get("/api/governors/pledges-debug/:name", async (req, res) => {
 
     res.json(cached);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    const errorMessage = getErrorMessage(err, "데이터 조회 실패");
+    res.status(500).json({
+      error: errorMessage,
+      ...(isDevelopment && { stack: err.stack })
+    });
   }
 });
 
@@ -1142,7 +1188,7 @@ app.delete("/api/governors/pledges-debug/:name", async (req, res) => {
 // ========== 게시판 API ==========
 
 // 게시글 목록 조회 (페이지네이션)
-app.get("/api/board/posts", async (req, res) => {
+app.get("/api/board/posts", readLimiter, async (req, res) => {
   try {
     const page = parseInt(req.query.page as string) || 1;
     const limit = Math.min(parseInt(req.query.limit as string) || 15, 50);
@@ -1193,7 +1239,7 @@ app.get("/api/board/posts", async (req, res) => {
 });
 
 // 게시글 상세 조회 (조회수 증가)
-app.get("/api/board/posts/:id", async (req, res) => {
+app.get("/api/board/posts/:id", readLimiter, async (req, res) => {
   try {
     const postId = new ObjectId(req.params.id as string);
 
@@ -1234,14 +1280,28 @@ app.post("/api/board/posts", postLimiter, async (req, res) => {
       return res.status(400).json({ error: "비밀번호는 4~20자여야 합니다" });
     }
 
+    // XSS 방지 - 입력 새니타이제이션
+    const sanitizedTitle = sanitizeHtml(title, {
+      allowedTags: [],
+      allowedAttributes: {}
+    });
+    const sanitizedContent = sanitizeHtml(content, {
+      allowedTags: ['p', 'br', 'strong', 'em', 'u'],
+      allowedAttributes: {}
+    });
+    const sanitizedNickname = sanitizeHtml(nickname, {
+      allowedTags: [],
+      allowedAttributes: {}
+    });
+
     // 비밀번호 해싱
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // 게시글 저장
     const result = await postsCollection.insertOne({
-      title,
-      content,
-      nickname,
+      title: sanitizedTitle,
+      content: sanitizedContent,
+      nickname: sanitizedNickname,
       password: hashedPassword,
       viewCount: 0,
       createdAt: new Date(),
@@ -1274,6 +1334,16 @@ app.patch("/api/board/posts/:id", async (req, res) => {
       return res.status(400).json({ error: "내용은 1~5000자여야 합니다" });
     }
 
+    // XSS 방지 - 입력 새니타이제이션
+    const sanitizedTitle = sanitizeHtml(title, {
+      allowedTags: [],
+      allowedAttributes: {}
+    });
+    const sanitizedContent = sanitizeHtml(content, {
+      allowedTags: ['p', 'br', 'strong', 'em', 'u'],
+      allowedAttributes: {}
+    });
+
     // 게시글 조회
     const post = await postsCollection.findOne({ _id: postId, isDeleted: false });
     if (!post) {
@@ -1281,14 +1351,14 @@ app.patch("/api/board/posts/:id", async (req, res) => {
     }
 
     // 관리자 비밀번호 확인
-    if (adminPassword && adminPassword === process.env.ADMIN_PASSWORD) {
+    if (adminPassword && await bcrypt.compare(adminPassword, process.env.ADMIN_PASSWORD!)) {
       // 관리자 권한으로 즉시 수정
       await postsCollection.updateOne(
         { _id: postId },
         {
           $set: {
-            title,
-            content,
+            title: sanitizedTitle,
+            content: sanitizedContent,
             updatedAt: new Date(),
           },
         }
@@ -1311,8 +1381,8 @@ app.patch("/api/board/posts/:id", async (req, res) => {
       { _id: postId },
       {
         $set: {
-          title,
-          content,
+          title: sanitizedTitle,
+          content: sanitizedContent,
           updatedAt: new Date(),
         },
       }
@@ -1338,7 +1408,7 @@ app.delete("/api/board/posts/:id", async (req, res) => {
     }
 
     // 관리자 비밀번호 확인
-    if (adminPassword && adminPassword === process.env.ADMIN_PASSWORD) {
+    if (adminPassword && await bcrypt.compare(adminPassword, process.env.ADMIN_PASSWORD!)) {
       // 관리자 권한으로 즉시 삭제
       await postsCollection.updateOne({ _id: postId }, { $set: { isDeleted: true, updatedAt: new Date() } });
       return res.json({ success: true, message: "게시글이 삭제되었습니다" });
@@ -1377,7 +1447,7 @@ app.post("/api/board/posts/:id/verify", async (req, res) => {
     }
 
     // 관리자 비밀번호 확인
-    if (adminPassword && adminPassword === process.env.ADMIN_PASSWORD) {
+    if (adminPassword && await bcrypt.compare(adminPassword, process.env.ADMIN_PASSWORD!)) {
       return res.json({ success: true, message: "비밀번호가 확인되었습니다" });
     }
 
@@ -1399,7 +1469,7 @@ app.post("/api/board/posts/:id/verify", async (req, res) => {
 });
 
 // 댓글 목록 조회
-app.get("/api/board/posts/:postId/comments", async (req, res) => {
+app.get("/api/board/posts/:postId/comments", readLimiter, async (req, res) => {
   try {
     const postId = new ObjectId(req.params.postId as string);
 
@@ -1449,14 +1519,24 @@ app.post("/api/board/posts/:postId/comments", postLimiter, async (req, res) => {
       return res.status(400).json({ error: "비밀번호는 4~20자여야 합니다" });
     }
 
+    // XSS 방지 - 입력 새니타이제이션
+    const sanitizedContent = sanitizeHtml(content, {
+      allowedTags: [],
+      allowedAttributes: {}
+    });
+    const sanitizedNickname = sanitizeHtml(nickname, {
+      allowedTags: [],
+      allowedAttributes: {}
+    });
+
     // 비밀번호 해싱
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // 댓글 저장
     const result = await commentsCollection.insertOne({
       postId: postId,
-      content,
-      nickname,
+      content: sanitizedContent,
+      nickname: sanitizedNickname,
       password: hashedPassword,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -1488,6 +1568,12 @@ app.patch("/api/board/comments/:id", async (req, res) => {
       return res.status(400).json({ error: "비밀번호를 입력해주세요" });
     }
 
+    // XSS 방지 - 입력 새니타이제이션
+    const sanitizedContent = sanitizeHtml(content, {
+      allowedTags: [],
+      allowedAttributes: {}
+    });
+
     // 댓글 조회
     const comment = await commentsCollection.findOne({ _id: commentId, isDeleted: false });
     if (!comment) {
@@ -1505,7 +1591,7 @@ app.patch("/api/board/comments/:id", async (req, res) => {
       { _id: commentId },
       {
         $set: {
-          content,
+          content: sanitizedContent,
           updatedAt: new Date(),
         },
       }
@@ -1531,7 +1617,7 @@ app.delete("/api/board/comments/:id", async (req, res) => {
     }
 
     // 관리자 비밀번호 확인
-    if (adminPassword && adminPassword === process.env.ADMIN_PASSWORD) {
+    if (adminPassword && await bcrypt.compare(adminPassword, process.env.ADMIN_PASSWORD!)) {
       // 관리자 권한으로 즉시 삭제
       await commentsCollection.updateOne({ _id: commentId }, { $set: { isDeleted: true, updatedAt: new Date() } });
       return res.json({ success: true, message: "댓글이 삭제되었습니다" });
@@ -1558,9 +1644,9 @@ app.delete("/api/board/comments/:id", async (req, res) => {
 });
 
 // 국회의원 상세 정보 조회 (이름으로)
-app.get("/api/assembly/member/:name", async (req, res) => {
+app.get("/api/assembly/member/:name", readLimiter, async (req, res) => {
   try {
-    const memberName = decodeURIComponent(req.params.name);
+    const memberName = decodeURIComponent(req.params.name as string);
 
     // MongoDB에서 국회의원 기본 정보 조회
     const cachedData = await assemblyMembersCollection.findOne({ _id: "current" });
@@ -1642,7 +1728,7 @@ async function getQuestions() {
 }
 
 // 정치성향 테스트 문항 전체 조회
-app.get("/api/political-test/questions", async (req, res) => {
+app.get("/api/political-test/questions", readLimiter, async (req, res) => {
   try {
     const questions = await getQuestions();
 
