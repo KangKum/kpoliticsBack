@@ -6,6 +6,7 @@ import cron from "node-cron";
 import puppeteer from "puppeteer";
 import bcrypt from "bcrypt";
 import rateLimit from "express-rate-limit";
+import { seedQuestionsData } from "./scripts/seedQuestions";
 
 dotenv.config();
 
@@ -1703,6 +1704,13 @@ async function startServer() {
     await questionsCollection.createIndex({ questionId: 1 }, { unique: true });
     await questionsCollection.createIndex({ order: 1 });
     console.log("✅ 정치성향 테스트 인덱스 생성 완료");
+
+    // 정치성향 테스트 문항 Seed (서버 시작 시 매번 실행)
+    try {
+      await seedQuestionsData(questionsCollection);
+    } catch (seedError) {
+      console.error("❌ 문항 Seed 실패:", seedError);
+    }
 
     // Check if cached data exists
     const cachedData = await assemblyMembersCollection.findOne({ _id: "current" });

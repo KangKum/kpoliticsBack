@@ -20,17 +20,11 @@ function shuffleArray<T>(array: T[]): T[] {
   return shuffled;
 }
 
-async function seedQuestions() {
-  try {
-    await client.connect();
-    console.log("✅ MongoDB 연결 성공");
-
-    const db = client.db("kpolitics");
-    const collection = db.collection("politicalTestQuestions");
-
-    // 기존 문항 삭제
-    await collection.deleteMany({});
-    console.log("🗑️ 기존 문항 삭제 완료");
+// 문항 데이터를 DB에 삽입하는 함수 (export용)
+export async function seedQuestionsData(collection: any) {
+  // 기존 문항 삭제
+  await collection.deleteMany({});
+  console.log("🗑️ 기존 문항 삭제 완료");
 
     // 문항 데이터 정의 (testplan.md 기준)
     const questions = [
@@ -353,6 +347,18 @@ async function seedQuestions() {
     console.log(`  사회: ${distribution.society}개`);
     console.log(`  정부: ${distribution.government}개`);
     console.log(`  안보: ${distribution.security}개`);
+}
+
+// 독립 실행용 함수 (npm run seed:questions 용)
+async function seedQuestions() {
+  try {
+    await client.connect();
+    console.log("✅ MongoDB 연결 성공");
+
+    const db = client.db("kpolitics");
+    const collection = db.collection("politicalTestQuestions");
+
+    await seedQuestionsData(collection);
   } catch (error) {
     console.error("❌ Seed 실패:", error);
     throw error;
