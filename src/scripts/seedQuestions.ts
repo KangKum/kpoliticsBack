@@ -39,7 +39,7 @@ async function seedQuestions() {
         questionId: "Q1",
         category: "economy",
         questionText:
-          "월급에서 매달 3~5만 원 정도 세금이 더 빠져나가지만,\n대신 병원비·교육비 부담이 눈에 띄게 줄어든다면, 당신의 선택은?",
+          "세금이 월 3~5만 원 늘지만, 병원비·교육비 부담이 크게 줄어든다면?",
         options: [
           { label: "A", text: "부담이 있어도 이런 변화라면 받아들일 수 있다", score: -2 },
           { label: "B", text: "어느 정도라면 감수할 수 있다", score: -1 },
