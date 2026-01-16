@@ -1350,8 +1350,8 @@ app.patch("/api/board/posts/:id", async (req, res) => {
       return res.status(404).json({ error: "게시글을 찾을 수 없습니다" });
     }
 
-    // 관리자 비밀번호 확인
-    if (adminPassword && await bcrypt.compare(adminPassword, process.env.ADMIN_PASSWORD!)) {
+    // 관리자 비밀번호 확인 (평문 비교)
+    if (adminPassword && adminPassword === process.env.ADMIN_PASSWORD) {
       // 관리자 권한으로 즉시 수정
       await postsCollection.updateOne(
         { _id: postId },
@@ -1407,8 +1407,8 @@ app.delete("/api/board/posts/:id", async (req, res) => {
       return res.status(404).json({ error: "게시글을 찾을 수 없습니다" });
     }
 
-    // 관리자 비밀번호 확인
-    if (adminPassword && await bcrypt.compare(adminPassword, process.env.ADMIN_PASSWORD!)) {
+    // 관리자 비밀번호 확인 (평문 비교)
+    if (adminPassword && adminPassword === process.env.ADMIN_PASSWORD) {
       // 관리자 권한으로 즉시 삭제
       await postsCollection.updateOne({ _id: postId }, { $set: { isDeleted: true, updatedAt: new Date() } });
       return res.json({ success: true, message: "게시글이 삭제되었습니다" });
@@ -1446,8 +1446,8 @@ app.post("/api/board/posts/:id/verify", async (req, res) => {
       return res.status(404).json({ error: "게시글을 찾을 수 없습니다" });
     }
 
-    // 관리자 비밀번호 확인
-    if (adminPassword && await bcrypt.compare(adminPassword, process.env.ADMIN_PASSWORD!)) {
+    // 관리자 비밀번호 확인 (평문 비교)
+    if (adminPassword && adminPassword === process.env.ADMIN_PASSWORD) {
       return res.json({ success: true, message: "비밀번호가 확인되었습니다" });
     }
 
@@ -1558,14 +1558,11 @@ app.post("/api/board/posts/:postId/comments", postLimiter, async (req, res) => {
 app.patch("/api/board/comments/:id", async (req, res) => {
   try {
     const commentId = new ObjectId(req.params.id as string);
-    const { content, password } = req.body;
+    const { content, password, adminPassword } = req.body;
 
     // 유효성 검증
     if (!content || content.length < 1 || content.length > 500) {
       return res.status(400).json({ error: "댓글은 1~500자여야 합니다" });
-    }
-    if (!password) {
-      return res.status(400).json({ error: "비밀번호를 입력해주세요" });
     }
 
     // XSS 방지 - 입력 새니타이제이션
@@ -1580,7 +1577,26 @@ app.patch("/api/board/comments/:id", async (req, res) => {
       return res.status(404).json({ error: "댓글을 찾을 수 없습니다" });
     }
 
-    // 비밀번호 검증
+    // 관리자 비밀번호 확인 (평문 비교)
+    if (adminPassword && adminPassword === process.env.ADMIN_PASSWORD) {
+      // 관리자 권한으로 즉시 수정
+      await commentsCollection.updateOne(
+        { _id: commentId },
+        {
+          $set: {
+            content: sanitizedContent,
+            updatedAt: new Date(),
+          },
+        }
+      );
+      return res.json({ success: true, message: "댓글이 수정되었습니다" });
+    }
+
+    // 일반 사용자 비밀번호 검증
+    if (!password) {
+      return res.status(400).json({ error: "비밀번호를 입력해주세요" });
+    }
+
     const isMatch = await bcrypt.compare(password, comment.password);
     if (!isMatch) {
       return res.status(401).json({ error: "비밀번호가 일치하지 않습니다" });
@@ -1616,8 +1632,8 @@ app.delete("/api/board/comments/:id", async (req, res) => {
       return res.status(404).json({ error: "댓글을 찾을 수 없습니다" });
     }
 
-    // 관리자 비밀번호 확인
-    if (adminPassword && await bcrypt.compare(adminPassword, process.env.ADMIN_PASSWORD!)) {
+    // 관리자 비밀번호 확인 (평문 비교)
+    if (adminPassword && adminPassword === process.env.ADMIN_PASSWORD) {
       // 관리자 권한으로 즉시 삭제
       await commentsCollection.updateOne({ _id: commentId }, { $set: { isDeleted: true, updatedAt: new Date() } });
       return res.json({ success: true, message: "댓글이 삭제되었습니다" });
